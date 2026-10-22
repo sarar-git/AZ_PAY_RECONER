@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Dashboard</title></head>
+<body style="font-family:Arial;max-width:900px;margin:20px auto;">
+  <h2>Amazon Reconciliation</h2>
+  <h3>Upload settlement files</h3>
+  <form id="uploadForm" enctype="multipart/form-data">
+    <input type="file" name="files[]" id="files" multiple accept=".txt,.tsv" required>
+    <button id="submitBtn" type="submit">Start Processing</button>
+  </form>
+  <p id="jobStatus"></p>
+
+  <h3>Your jobs</h3>
+  <table border="1" cellpadding="6" cellspacing="0" width="100%">
+    <tr><th>ID</th><th>Status</th><th>Message</th><th>Warnings</th><th>Download</th></tr>
+    {% for j in jobs %}
+    <tr>
+      <td>{{ j['id'] }}</td>
+      <td>{{ j['status'] }}</td>
+      <td>{{ j['message'] or '' }}</td>
+      <td><pre style="white-space:pre-wrap">{{ j['warnings'] or '' }}</pre></td>
+      <td>{% if j['status']=='completed' %}<a href="{{ url_for('result', job_id=j['id']) }}">Download</a>{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table>
+
+<script>
+const form = document.getElementById('uploadForm');
+const statusEl = document.getElementById('jobStatus');
+const submitBtn = document.getElementById('submitBtn');
+let activeTimer = null;
+
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  if (activeTimer) {
+    clearInterval(activeTimer);
+    activeTimer = null;
+  }
+
+  submitBtn.disabled = true;
+  statusEl.textContent = 'Uploading...';
+
+  try {
+    const fd = new FormData(form);
+    const res = await fetch('/upload', { method:'POST', body:fd });
+    const data = await res.json();
+    if(!res.ok){
+      statusEl.textContent = data.error || 'Upload failed';
+      submitBtn.disabled = false;
+      return;
+    }
+
+    statusEl.textContent = `Job ${data.job_id} queued`;
+    poll(data.job_id);
+  } catch (err) {
+    statusEl.textContent = 'Upload failed due to network/server error';
+    submitBtn.disabled = false;
+  }
+});
+
+function poll(jobId){
+  activeTimer = setInterval(async () => {
+    try {
+      const r = await fetch(`/status/${jobId}`);
+      if(!r.ok){
+        clearInterval(activeTimer);
+        activeTimer = null;
+        statusEl.textContent = 'Status check failed';
+        submitBtn.disabled = false;
+        return;
+      }
+
+      const j = await r.json();
+      statusEl.textContent = `Job ${j.id}: ${j.status} - ${j.message || ''}`;
+
+      if(j.status === 'completed'){
+        clearInterval(activeTimer);
+        activeTimer = null;
+        statusEl.innerHTML += ` | <a href="/result/${jobId}">Download result</a> | <a href="/dashboard">Refresh jobs</a>`;
+        submitBtn.disabled = false;
+      }
+
+      if(j.status === 'failed'){
+        clearInterval(activeTimer);
+        activeTimer = null;
+        statusEl.textContent = `Job ${j.id} failed: ${j.message || 'Unknown error'}`;
+        submitBtn.disabled = false;
+      }
+    } catch (err) {
+      clearInterval(activeTimer);
+      activeTimer = null;
+      statusEl.textContent = 'Status polling interrupted';
+      submitBtn.disabled = false;
+    }
+  }, 2000);
+}
+</script>
+</body>
+</html>
